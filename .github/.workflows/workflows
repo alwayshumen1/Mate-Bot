@@ -1,0 +1,370 @@
+name: Stockfish
+on:
+  push:
+    branches:
+      - master
+      - tools
+      - github_ci
+  pull_request:
+    branches:
+      - master
+      - tools
+jobs:
+  Stockfish:
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    env:
+      COMPILER: ${{ matrix.config.compiler }}
+      COMP: ${{ matrix.config.comp }}
+      CXXFLAGS: "-Werror"
+    strategy:
+      matrix:
+        config:
+          - {
+              name: "Ubuntu 20.04 GCC",
+              os: ubuntu-20.04,
+              compiler: g++,
+              comp: gcc,
+              run_expensive_tests: true
+            }
+          - {
+              name: "Ubuntu 20.04 Clang",
+              os: ubuntu-20.04,
+              compiler: clang++,
+              comp: clang,
+              run_expensive_tests: false
+            }
+
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Download required packages
+        run: |
+          sudo apt update
+          sudo apt install expect valgrind g++-multilib
+
+      - name: Download the used network from the fishtest framework
+        run: |
+          make net
+
+      - name: Extract the bench number from the commit history
+        run: |
+          git log HEAD | grep "\b[Bb]ench[ :]\+[0-9]\{7\}" | head -n 1 | sed "s/[^0-9]*\([0-9]*\).*/\1/g" > git_sig
+          [ -s git_sig ] && echo "benchref=$(cat git_sig)" >> $GITHUB_ENV && echo "Reference bench:" $(cat git_sig) || echo "No bench found"
+
+      - name: Check compiler
+        run: |
+          $COMPILER -v
+
+      - name: Test help target
+        run: |
+          make help
+
+      # x86-32 tests
+
+      - name: Test debug x86-32 build
+        run: |
+          export CXXFLAGS="-Werror -D_GLIBCXX_DEBUG"
+          make clean
+          make -j2 ARCH=x86-32 optimize=no debug=yes build
+          ../tests/signature.sh $benchref
+
+      - name: Test x86-32 build
+        run: |
+          make clean
+          make -j2 ARCH=x86-32 build
+          ../tests/signature.sh $benchref
+
+      - name: Test x86-32-sse41-popcnt build
+        run: |
+          make clean
+          make -j2 ARCH=x86-32-sse41-popcnt build
+          ../tests/signature.sh $benchref
+
+      - name: Test x86-32-sse2 build
+        run: |
+          make clean
+          make -j2 ARCH=x86-32-sse2 build
+          ../tests/signature.sh $benchref
+
+      - name: Test general-32 build
+        run: |
+          make clean
+          make -j2 ARCH=general-32 build
+          ../tests/signature.sh $benchref
+
+      # x86-64 tests
+
+      - name: Test debug x86-64-modern build
+        run: |
+          export CXXFLAGS="-Werror -D_GLIBCXX_DEBUG"
+          make clean
+          make -j2 ARCH=x86-64-modern optimize=no debug=yes build
+          ../tests/signature.sh $benchref
+
+      - name: Test x86-64-modern build
+        run: |
+          make clean
+          make -j2 ARCH=x86-64-modern build
+          ../tests/signature.sh $benchref
+
+      - name: Test x86-64-ssse3 build
+        run: |
+          make clean
+          make -j2 ARCH=x86-64-ssse3 build
+          ../tests/signature.sh $benchref
+
+      - name: Test x86-64-sse3-popcnt build
+        run: |
+          make clean
+          make -j2 ARCH=x86-64-sse3-popcnt build
+          ../tests/signature.sh $benchref
+
+      - name: Test x86-64 build
+        run: |
+          make clean
+          make -j2 ARCH=x86-64 build
+          ../tests/signature.sh $benchref
+
+      - name: Test general-64 build
+        run: |
+          make clean
+          make -j2 ARCH=general-64 build
+          ../tests/signature.sh $benchref
+
+      # x86-64 with newer extensions tests
+
+      - name: Compile x86-64-avx2 build
+        run: |
+          make clean
+          make -j2 ARCH=x86-64-avx2 build
+
+      - name: Compile x86-64-bmi2 build
+        run: |
+          make clean
+          make -j2 ARCH=x86-64-bmi2 build
+
+      - name: Compile x86-64-avx512 build
+        run: |
+          make clean
+          make -j2 ARCH=x86-64-avx512 build
+
+      - name: Compile x86-64-vnni512 build
+        run: |
+          make clean
+          make -j2 ARCH=x86-64-vnni512 build
+
+      - name: Compile x86-64-vnni256 build
+        run: |
+          make clean
+          make -j2 ARCH=x86-64-vnni256 build
+
+      # Other tests
+
+      - name: Check perft and search reproducibility
+        run: |
+          make clean
+          make -j2 ARCH=x86-64-modern build
+          ../tests/perft.sh
+          ../tests/reprosearch.sh
+
+      # Sanitizers
+
+      - name: Run under valgrind
+        if: ${{ matrix.config.run_expensive_tests }}
+        run: |
+          export CXXFLAGS="-O1 -fno-inline"
+          make clean
+          make -j2 ARCH=x86-64-modern debug=yes optimize=no build > /dev/null
+          ../tests/instrumented.sh --valgrind
+          ../tests/instrumented.sh --valgrind-thread
+
+      - name: Run with UB sanitizer
+        if: ${{ matrix.config.run_expensive_tests }}
+        run: |
+          export CXXFLAGS="-O1 -fno-inline"
+          make clean
+          make -j2 ARCH=x86-64-modern sanitize=undefined optimize=no debug=yes build > /dev/null
+          ../tests/instrumented.sh --sanitizer-undefined
+
+      - name: Run with thread sanitizer
+        if: ${{ matrix.config.run_expensive_tests }}
+        run: |
+          export CXXFLAGS="-O1 -fno-inline"
+          make clean
+          make -j2 ARCH=x86-64-modern sanitize=thread optimize=no debug=yes build > /dev/null
+          ../tests/instrumented.sh --sanitizer-thread
+
+name: ffishjs
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  EM_VERSION: 1.39.16
+  EM_CACHE_FOLDER: 'emsdk-cache'
+
+jobs:
+  test:
+    runs-on: ubuntu-20.04
+
+    strategy:
+      matrix:
+        node-version: [12.x]
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup cache
+        id: cache-system-libraries
+        uses: actions/cache@v2
+        with:
+          path: ${{env.EM_CACHE_FOLDER}}
+          key: emsdk-${{env.EM_VERSION}}-${{ runner.os }}
+      - uses: mymindstorm/setup-emsdk@v7
+        with:
+          version: ${{env.EM_VERSION}}
+          actions-cache-folder: ${{env.EM_CACHE_FOLDER}}
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v1
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Build ffishjs
+        working-directory: src
+        run: make -f Makefile_js build debug=yes optimize=no
+      - name: Install dependencies
+        working-directory: tests/js
+        run: npm install
+      - name: Run unit tests
+        working-directory: tests/js
+        run: npm test
+
+name: fairy
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+jobs:
+  fairy:
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    env:
+      COMPILER: ${{ matrix.config.compiler }}
+      COMP: ${{ matrix.config.comp }}
+      CXXFLAGS: "-Werror"
+    strategy:
+      matrix:
+        config:
+          - {
+              name: "Ubuntu 20.04 GCC",
+              os: ubuntu-20.04,
+              compiler: g++,
+              comp: gcc,
+              run_expensive_tests: true
+            }
+          - {
+              name: "Ubuntu 20.04 Clang",
+              os: ubuntu-20.04,
+              compiler: clang++,
+              comp: clang,
+              run_expensive_tests: false
+            }
+
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Download required packages
+        run: |
+          sudo apt update
+          sudo apt install expect valgrind g++-multilib
+
+      - name: Download the used network from the fishtest framework
+        run: |
+          make net
+
+      - name: Test NNUE
+        run: |
+          make clean
+          make -j2 ARCH=x86-64 nnue=yes debug=yes build
+          ./stockfish bench
+
+      - name: Test NNUE largeboards
+        run: |
+          make clean
+          make -j2 ARCH=x86-64 largeboards=yes nnue=yes debug=yes build
+          ./stockfish bench
+
+      - name: Build all variants
+        run: |
+          make clean
+          make -j2 ARCH=x86-64 largeboards=yes all=yes debug=yes build
+
+      - name: Test protocols
+        run: |
+          ../tests/protocol.sh
+
+      - name: Test variants.ini
+        run: |
+          ! ./stockfish check variants.ini 2>&1 >/dev/null | grep -v "Parsing variant"
+
+      - name: Test variant perft
+        run: |
+          ../tests/perft.sh all
+
+      - name: Test variant bench
+        run: |
+          ./stockfish bench xiangqi
+          ./stockfish bench shogi
+          ./stockfish bench capablanca
+          ./stockfish bench sittuyin
+
+      - name: Test 32bit largeboards
+        run: |
+          if [[ "$COMP" == "gcc" ]]; then export EXTRACXXFLAGS=-Wno-class-memaccess; fi
+          make clean
+          make -j2 ARCH=x86-32 largeboards=yes build
+          ../tests/perft.sh largeboard
+
+name: build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: install
+        run: sudo apt install mingw-w64
+
+      - name: make default
+        run: cd src && make clean && make -j build COMP=mingw ARCH=x86-64 EXE=fairy-stockfish_x86-64.exe && strip fairy-stockfish_x86-64.exe
+
+      - name: make largeboards
+        run: cd src && make clean && make -j build COMP=mingw ARCH=x86-64 EXE=fairy-stockfish-largeboards_x86-64.exe largeboards=yes && strip fairy-stockfish-largeboards_x86-64.exe
+
+      - uses: actions/upload-artifact@v2
+        with:
+          name: fairy-stockfish
+          path: src/fairy-stockfish*.exe
